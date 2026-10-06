@@ -182,6 +182,7 @@ impl Importer for Azw3Importer {
             // rewrite those to the discovered asset paths so they resolve.
             return Ok(rewrite_css_embed_refs(
                 flow_slice(text, start, end),
+                path,
                 &self.assets,
             ));
         }
@@ -810,7 +811,11 @@ fn flow_slice(text: &[u8], start: usize, end: usize) -> &[u8] {
 /// `images/image_NNNN.ext` or `fonts/font_NNNN.ext`, so the index picks the
 /// right path (and extension) directly; anything unresolvable is left as a
 /// best-guess image path rather than a dangling `kindle:` URL.
-fn rewrite_css_embed_refs(css: &[u8], assets: &[String]) -> Vec<u8> {
+///
+/// CSS urls resolve against the stylesheet, so paths are written relative to
+/// `css_path` (e.g. `../images/image_0000.png` from `styles/style0001.css`).
+fn rewrite_css_embed_refs(css: &[u8], css_path: &str, assets: &[String]) -> Vec<u8> {
+    let up = "../".repeat(css_path.matches('/').count());
     let needle = b"kindle:embed:";
     let finder = memmem::Finder::new(needle);
 
@@ -849,6 +854,7 @@ fn rewrite_css_embed_refs(css: &[u8], assets: &[String]) -> Vec<u8> {
             .cloned()
             .unwrap_or_else(|| format!("images/image_{embed_idx:04}.jpg"));
 
+        output.extend_from_slice(up.as_bytes());
         output.extend_from_slice(asset_path.as_bytes());
         pos = start + needle.len() + skip;
     }
@@ -937,6 +943,8 @@ fn toc_node_to_entry(node: TocNode) -> TocEntry {
 mod tests {
     use super::rewrite_css_embed_refs;
 
+    const CSS: &str = "styles/style0000.css";
+
     fn assets() -> Vec<String> {
         vec![
             "images/image_0000.png".to_string(),
@@ -948,47 +956,47 @@ mod tests {
     #[test]
     fn rewrites_font_ref_with_mime_suffix() {
         let css = b"@font-face { src: url(kindle:embed:0002?mime=font/otf); }";
-        let out = rewrite_css_embed_refs(css, &assets());
+        let out = rewrite_css_embed_refs(css, CSS, &assets());
         assert_eq!(
             String::from_utf8(out).unwrap(),
-            "@font-face { src: url(fonts/font_0001.otf); }"
+            "@font-face { src: url(../fonts/font_0001.otf); }"
         );
     }
 
     #[test]
     fn rewrites_bare_image_ref_using_discovered_extension() {
         let css = b"h1 { background: url(kindle:embed:0001); }";
-        let out = rewrite_css_embed_refs(css, &assets());
+        let out = rewrite_css_embed_refs(css, CSS, &assets());
         assert_eq!(
             String::from_utf8(out).unwrap(),
-            "h1 { background: url(images/image_0000.png); }"
+            "h1 { background: url(../images/image_0000.png); }"
         );
     }
 
     #[test]
     fn unresolvable_ref_falls_back_to_image_path() {
         let css = b"p { background: url(kindle:embed:000A); }";
-        let out = rewrite_css_embed_refs(css, &assets());
+        let out = rewrite_css_embed_refs(css, CSS, &assets());
         assert_eq!(
             String::from_utf8(out).unwrap(),
-            "p { background: url(images/image_0009.jpg); }"
+            "p { background: url(../images/image_0009.jpg); }"
         );
     }
 
     #[test]
     fn css_without_embed_refs_is_unchanged() {
         let css = b"p { margin: 1em; } /* kindle:flow stays */";
-        let out = rewrite_css_embed_refs(css, &assets());
+        let out = rewrite_css_embed_refs(css, CSS, &assets());
         assert_eq!(out, css);
     }
 
     #[test]
     fn quoted_ref_terminates_at_quote() {
         let css = b"p { background: url('kindle:embed:0003'); }";
-        let out = rewrite_css_embed_refs(css, &assets());
+        let out = rewrite_css_embed_refs(css, CSS, &assets());
         assert_eq!(
             String::from_utf8(out).unwrap(),
-            "p { background: url('images/image_0002.gif'); }"
+            "p { background: url('../images/image_0002.gif'); }"
         );
     }
 }

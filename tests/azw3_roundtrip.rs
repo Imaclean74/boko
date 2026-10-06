@@ -288,6 +288,31 @@ fn azw3_roundtrip_resolves_embed_refs_inside_css() {
         .find(|a| css_text.contains(a.as_str()))
         .cloned()
         .expect("CSS must reference a discovered asset path");
+
+    // ...and the url resolves to it relative to the stylesheet itself, the
+    // way a reading system resolves it (not relative to the book root).
+    let url = css_text
+        .split("url(")
+        .nth(1)
+        .and_then(|rest| rest.split(')').next())
+        .expect("url() in CSS")
+        .trim_matches(['"', '\'']);
+    let mut resolved: Vec<&str> = css_asset.split('/').collect();
+    resolved.pop();
+    for part in url.split('/') {
+        match part {
+            ".." => {
+                resolved.pop();
+            }
+            "." => {}
+            p => resolved.push(p),
+        }
+    }
+    assert_eq!(
+        resolved.join("/"),
+        referenced,
+        "url({url}) in {css_asset} must resolve to the asset"
+    );
     assert!(
         referenced.starts_with("images/image_"),
         "expected a discovered image asset, got {referenced}"
